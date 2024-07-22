@@ -1,0 +1,174 @@
+---
+title: "PM01_QCFilter"
+output: html_document
+date: "2024-04-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Load libraries
+```{r}
+#load libraries 
+library(dartR)
+library(adegenet)
+library(poppr)
+library(hierfstat)
+library(reshape2)
+library(ggplot2)
+library(RColorBrewer)
+library(scales)
+library(dplyr)
+```
+
+#Load data
+```{r}
+gl <- gl.read.dart(filename = "Data/Report_DPoc22-7167_SNP_mapping_2.csv", covfilename = "Data/Pmeandrina_dartLIMS_sector.csv")
+
+#dropping individuals that were falsely ID'd as P. meandrina 
+gl <- gl.drop.ind(gl,
+   ind.list=c('JAN2019_13-124_P. verrucosa_103', 'April2021-Kelso-P. verrucosa-17','P ver 221', 'P ver 371', 'P ver 372', 'P ver 291', 'P ver 044'))
+
+
+#we know that 62 total samples failed, so this makes sense that we only have 115 / 188 individuals recognised in our data frame. 
+```
+
+# Check metadata
+```{r}
+#double checking metadata, number of indivs, loci and populations 
+nInd(gl)
+#108 individuals
+
+nPop(gl)
+popNames(gl)
+#we have 10 populations/reefs 
+
+nLoc(gl)
+#44,310 loci in the original dataset (gl)
+
+#converting SNP files to a matrix 
+#generate a matrix of the SNP scores, with 0 as homozygous reference, 2 as homozygous alternate and 1 as heterozygous
+m <- as.matrix(gl)
+
+gl.report.callrate(gl, method = "ind")
+```
+
+#1. Filtering steps
+
+##1.1 Filter secondaries
+```{r}
+#filter secondaries. this helps with linkage disequilibrium 
+gl <- gl.filter.secondaries(gl)
+nLoc(gl)
+nInd(gl)
+#27,253 loci remain
+```
+
+##1.2 Filter reproducibility 
+```{r}
+gl <- gl.filter.reproducibility(gl, threshold = 0.98)
+nLoc(gl)
+nInd(gl)
+#22,002 loci now 
+```
+
+
+##1.3 Filter call rate
+```{r}
+#filter loci with call rates less than 0.80 
+gl2.80 <- gl.filter.callrate(gl, method = "loc", threshold = 0.80)
+nLoc(gl2.80)
+nInd(gl2.80)
+#7273 loci
+
+``` 
+
+
+##1.4 Filter read depth
+```{r}
+gl.report.rdepth(gl2.80)
+#filter read depth < 5x
+gl2.80 <- gl.filter.rdepth(gl2.80, lower = 5, upper = 200, verbose = 3)
+
+nLoc(gl2.80)
+#3443 loci 
+```
+
+##1.5 Filter MAFs
+```{r}
+#MAFs provide information about rare vs. common variants in a population. 
+#Rare varients are < 0.05. #common variants are > 0.05 
+#this will give an idea of the variation of genotypes for a given SNP in a population. If MAF for a population is low, it implies the major allele for the SNP is conserved and fixed, potentially. If MAF is high, it indicates the SNP is not conserved.
+
+#If for a given SNP you have missing data in all populations but one, we would exclude such SNP from the analysis (but if you applied the 95% missingness filter you probably already settled this). 
+#If you have a SNP that assumes a particular genotype only in one population, then keep it, as this SNP could be very informative about population structure and local adaptation
+
+
+#We will filter out loci with a MAF less than 0.05.**
+gl3 <- gl.filter.maf(gl2.80, threshold = 0.95) 
+
+#report for MAF after filtering with MAF < 0.05 
+gl.report.maf(gl3)
+nLoc(gl3)
+#2270 snps remaining 
+
+```
+
+
+##1.6 Impute missing data 
+```{r, include=FALSE}
+#here we are imputing any missing data using the 'neighbour' method. this is essential for some analyses later on to not have missing data. The advantage of the 'neighbour' approach (compared to 'HW' or 'frequency')is that it works regardless of how many individuals are in the population to which the focal individual belongs, and the displacement of the individual is haphazard as opposed to drawing individual toward the population centroid with HW or Freq. 
+#Better for our analysis 
+#a lot of downstream analysis cannot deal with missing data 
+
+gl3 <- gl.impute(
+  gl3,
+  method = "neighbour",
+  fill.residual = TRUE,
+  parallel = FALSE,
+  verbose = NULL
+)
+
+save(gl3, file = "Data/gl3.RData")
+```
+
+#2. Additional Filtering
+
+##2.1 Convert to genind
+```{r}
+#converting a genlight object (we have) to a genind object so we can look at genetic data at an individual data using adegenet package. 
+pmea_gen <- gl2gi(gl3, probar = FALSE, verbose = NULL)
+pmea_gen
+
+is.genind(pmea_gen)
+```
+
+##2.2 Check relatedness
+```{r}
+#here we are checking for any clones / duplicate samples. We want to remove any that are. 
+#check genotypes are unique
+pmea_gen_mlg <- mlg(pmea_gen)
+
+#we don't have any clones present in dataset
+```
+
+##2.3 Filter monomorphic loci
+```{r}
+#check that loci are still polymorphic after filtering. Retaining monomorphic loci unnecessarily increases the size of the dataset and will affect some calculations.
+
+isPoly(pmea_gen) %>% summary
+
+#remove loci that are not polymorphic
+
+poly_loci = names(which(isPoly(pmea_gen) == TRUE))
+pmea_gen = pmea_gen[loc = poly_loci]
+isPoly(pmea_gen) %>% summary
+
+#removed 119 monomorphic loci; now we have 4,010 loci remaining 
+```
+
+#2.4 Save post-filtering dataset to be used in pairwise genetic comparisons (02_PopStats.Rmd)
+```{r}
+save(pmea_gen, file = "Data/pmea_gen.RData")
+```
