@@ -1,0 +1,160 @@
+---
+title: "PM06_EnviroVar"
+output: html_document
+date: "2024-04-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+##6.1 Spatial data (MEMs)
+#8 Moran Eigenvector Maps for spatial environment 
+```{r}
+library('codep')
+library('adespatial')
+library('rnaturalearth')
+library('rnaturalearthdata')
+library('raster')
+library('tidyverse')
+
+geo = read.csv('Data/pmea.coords.ch3.csv') %>% 
+  rename(pop = name) %>% 
+  mutate(ID = 1:nrow(.)) %>% 
+  mutate(ID = as.character(ID))
+              
+# calculate distance between sampling locations
+DistSpatial=gcd.hf(geo[,2:3]) 
+
+# compute dbMEMs
+dbmem = dbmem(DistSpatial)
+
+# get countries polygons for plotting
+landPolygons = ne_countries(scale = 'medium')
+
+# create colorpalette for MEM
+paletteMEM = colorRampPalette(c('red','yellow','green2'))(20)
+
+# select MEM of interest
+par(mfrow=c(2,3))
+
+for (i in 1:5) {
+  
+MoI = paste0('MEM',i)
+plot(geo[,3:2], pch=21, bg=paletteMEM[cut(dbmem[,MoI], breaks = 20)])
+plot(landPolygons, add=T, col='grey')
+
+}
+
+```
+
+#Extract dbMEMs
+```{r}
+dbmem_df <- as.data.frame(dbmem) %>% 
+  tibble::rownames_to_column(var = "ID")
+
+# Left join 'dbmem_df' with the 'geo' data frame based on the 'ID' column
+dbmem_with_reef <- dbmem_df %>%  left_join(geo)
+
+dbmem.var <-dbmem_with_reef %>% dplyr::select(c(pop, MEM1, MEM2, MEM3)) %>% 
+  rename(Reef = pop)
+```
+
+```{r}
+#Calculate non-thermal enviro data for GBR reefs
+pmea.light <- read.csv("Data/pmea.lightdata.csv") 
+pmea.light <- pmea.light %>% dplyr::select(c(Aggregated.Date.Time, Variable, Depth, Site.Name, Latitude, Longitude, mean)) %>% 
+  mutate(Variable = as.factor(Variable))
+
+
+pmea.light <- pmea.light %>%
+  group_by(Site.Name) %>%
+  summarize(mean = mean(mean, na.rm = TRUE)) %>% 
+  rename(Kd_490 = mean) %>% 
+  rename(Reef = Site.Name)
+
+
+#save(pmea.light, file = "pmea.light.RData")
+```
+
+#Non-thermal variables 
+```{r}
+library(tidyverse)
+library(vegan)
+library(GGally)
+library(corrplot)
+library(car)
+library(scales)
+library(ggrepel)
+library(gclus)
+library(ape)
+
+#set up non-thermal variables. Remove any DHW-related variables. 
+pmea.recifs <- read.csv("Data/pmea_recifs.csv")  %>% 
+  dplyr::select(-ID, -POI_LON, -POI_LAT, -DIST) 
+
+
+pmea.light <- pmea.light %>% 
+  mutate(Reef = as.factor(Reef))
+
+nontherm.var <- pmea.recifs %>% dplyr::select(POI_ID, SCV_me_002) %>% 
+      rename(Reef = POI_ID) %>% 
+    mutate(Reef = as.factor(Reef))
+
+nontherm.var <- nontherm.var %>% left_join(., pmea.light)
+
+nontherm.pred <- nontherm.var[2:3]
+
+```
+
+```{r}
+library(corrplot)
+
+nontherm.pred %>% cor %>% corrplot()
+nontherm.pred %>% cor 
+
+#all correlations are 0.60 and below which is great. 
+```
+
+```{r}
+#thermal predictions 
+therm.var <- pmea.recifs %>% dplyr::select(POI_ID, DHW_me_002, SST_me_002) %>% 
+        rename(Reef = POI_ID) 
+
+therm.pred <- therm.var[2:3]
+
+therm.pred %>% cor %>% corrplot()
+therm.pred %>% cor 
+
+#below 0.70 so we can include both DHW and SST 
+```
+
+#Joining thermal, non-thermal enviro, and spatial datasets into one 
+```{r}
+dbmem.nontherm <- dbmem.var %>% left_join(.,nontherm.var)
+
+all.var <- dbmem.nontherm %>% left_join(., therm.var) 
+
+save(all.var, file = "Data/all.var.RData")
+```
+
+
+```{r}
+all.var <- all.var %>% 
+  mutate(Reef = as.factor(Reef))
+
+all.var
+
+all.pred <- all.var[2:8]
+```
+
+
+##Check correlations for all variables 
+```{r}
+all.pred %>% cor() %>% corrplot()
+all.pred %>% cor()
+
+all.env <- all.var
+```

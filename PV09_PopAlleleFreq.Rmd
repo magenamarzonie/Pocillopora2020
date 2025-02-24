@@ -1,0 +1,109 @@
+---
+title: "PV09_PopAlleleFreq"
+output: html_document
+date: "2024-04-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+#9 partial RDA  
+**Here we are going to run redundancy analysis using a different approach. We will be using allele frequencies at the population level instead of euclidean SNP distances at the individual level.**
+
+```{r}
+library(psych)    # Used to investigate correlations among predictors
+library(vegan)    # Used to run RDA
+```
+
+
+##9.1 Calcualte allele frequencies
+```{r}
+# Calculate allele frequencies for each site. I created a separate gen.ind so we can measure population level allele frequencies instead of by sector. this is pver_gen.pop
+allele_freqs = data.frame(rraf(pver_gen.pop, by_pop=TRUE, correction = FALSE), check.names = FALSE)
+
+# Keep only the first of the two alleles for each SNP (since p=1-q).
+allele_freqs = allele_freqs[, seq(1, dim(allele_freqs)[2], 2)]
+
+# Export allele frequencies
+write.csv(allele_freqs, file = "allele_freqs.csv", row.names = TRUE)
+```
+
+
+```{r}
+#loading the metadata 
+pver.meta2
+```
+
+
+
+```{r}
+pop.env <- pver.meta2 %>% group_by(Reef) %>% 
+  summarise(
+    pop.MMM = mean(MMM),
+    pop.Kd_490 = mean(Kd_490),
+    pop.SCV = mean(SCV_me_002),
+    pop.DHW = mean(DHW_me_002),
+    pop.SST = mean(SST_me_002), 
+    pop.MEM1 = mean(MEM1),
+    pop.MEM3 = mean(MEM3)
+  )
+
+pop.env <- pop.env %>% filter(Reef != "22-084")
+pop.env <- pop.env %>% filter(Reef != "Chinaman")
+pop.env <- pop.env %>% filter(Reef != "Lady Musgrave")
+pop.env <- pop.env %>% filter(Reef != "Hoskyns")
+
+
+write.csv(pop.env, file="environmental_data.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+# Import environmental data and make reef the row name. 
+
+env.raw = read.csv("environmental_data.csv", row.names = 1)
+env.raw <- round(env.raw, digits = 2)
+
+pred <- env.raw %>% dplyr::select(pop.MMM, pop.Kd_490, pop.SCV, pop.DHW, pop.SST, pop.MEM1, pop.MEM3)
+
+```
+
+```{r}
+# Use backward selection to identify significant thermal environmental variables
+pver.rda <- rda(allele_freqs ~ ., data = pred, scale = T)
+pver.rda
+
+pver.rda.nontherm <- rda(allele_freqs ~ pop.SCV + pop.Kd_490 + Condition(pop.MMM + pop.DHW + pop.MEM1 + pop.MEM3), data=pred, scale=T)
+
+pver.rda.therm <- rda(allele_freqs ~ pop.MMM + pop.DHW + Condition(pop.MEM1 + pop.MEM3 + pop.SCV + pop.Kd_490 ), data=pred, scale=T)
+
+pver.rda.geo <- rda(allele_freqs ~ pop.MEM1 + pop.MEM3 + Condition(pop.MMM + pop.DHW + pop.SCV + pop.Kd_490 ), data=pred, scale=T)
+
+```
+
+
+```{r}
+summary(pver.rda)
+summary(pver.rda.therm)
+summary(pver.rda.nontherm)
+summary(pver.rda.geo)
+```
+
+```{r}
+anova(pver.rda)
+anova(pver.rda.therm)
+anova(pver.rda.nontherm)
+anova(pver.rda.geo)
+```
+
+```{r}
+RsquareAdj(pver.rda)
+RsquareAdj(pver.rda.nontherm)
+RsquareAdj(pver.rda.therm)  #thermal metrics are the strongest predictor which is cool!
+RsquareAdj(pver.rda.geo)
+```
+

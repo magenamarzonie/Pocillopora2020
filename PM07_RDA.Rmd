@@ -1,0 +1,248 @@
+---
+title: "PM07_RDA"
+output: html_document
+date: "2024-04-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(adegenet)
+library(usedist)
+library(vegan)
+library(tidyverse)
+
+pmea.meta <- read.csv("Data/pmea.meta2.csv") %>% 
+  rename(Reef = pop) %>% 
+  mutate(Reef = as.factor(Reef)) %>% 
+  mutate(Ind = as.factor(Ind)) %>% 
+  dplyr::select(Ind, Reef, MMM, sector) %>% 
+  filter(Ind != c('JAN2019_13-124_P. verrucosa_103', 'April2021-Kelso-P. verrucosa-17','P ver 221', 'P ver 371', 'P ver 372', 'P ver 291', 'P ver 044'))
+
+pmea.meta <- pmea.meta %>% left_join(admix_clust) %>% 
+  na.omit()
+
+pmea.meta2 <- pmea.meta %>% left_join(all.env) %>% na.omit() %>% 
+  mutate(Ind = as.factor(Ind))
+
+row.names(pmea.meta2) <- pmea.meta2$Ind
+
+```
+
+
+##8.1 PCoA
+```{r}
+#join all environmental data together
+library(tidyverse)
+
+load("Data/gl3.RData")
+#calculate distance matrix 
+dist_pmea <- gl.dist.ind(gl3, method = "euclidean", scale = TRUE)
+
+pcoa.pmea <- cmdscale(dist_pmea, eig = TRUE) #classic PCoA 
+
+pcoa.pmeaXY <- data.frame(pcoa.pmea$points) %>% 
+    rownames_to_column(var = "Ind") %>% 
+  left_join(., pmea.meta2) %>% 
+  mutate(Ind = as.factor(Ind)) 
+
+pcoa_plot <-pcoa.pmeaXY %>%
+  ggplot(aes(X1, X2, fill = Reef)) + 
+  geom_point(alpha = 1, shape = 21, size = 3) +
+  theme(legend.position = "right", aspect.ratio = 1, text = element_text(size = 10))
+
+pcoa_plot
+
+pcoa_result <- pcoa.pmeaXY[, c("X1", "X2")]
+```
+
+
+Genetic data
+##1.1 Calculate individual genetic distance
+```{r}
+#genind format genetic matrix 
+load("Data/pmea_gen.RData")
+
+gen <- pmea_gen %>% as.matrix
+
+dim(gen)
+#  180 ind and 7150 loci
+sum(is.na(gen))
+#0 because we already imputed missing data. 
+
+```
+
+
+```{r}
+#making a common dataframe with the 247 individuals that match. 
+common_row_names <- intersect(rownames(gen), rownames(pmea.meta2))
+
+#make subset dataframe so that we can run the RDA code below. 
+meta <- pmea.meta2[common_row_names, ]
+gen <- gen[common_row_names, ]
+```
+
+
+```{r}
+library(vegan)
+library(corrplot)
+
+ord_pmea <- rda(gen ~ SCV_me_002 + Kd_490 + DHW_me_002 + SST_me_002 + Admix + Condition(MEM1 + MEM3), data = meta)
+
+sort(vif.cca(ord_pmea)) 
+
+ord_pmea_forward <- ordistep(ord_pmea, direction = "forward", permutations = 999)
+anova(ord_pmea_forward, by = 'margin')
+
+R2adj <- RsquareAdj(ord_pmea_forward)$adj.r.squared
+R2adj
+
+ord_pmea_back <- ordistep(ord_pmea, direction = "backward", permutations = 999)
+anova(ord_pmea_back, by = 'margin')
+
+R2adj <- RsquareAdj(ord_pmea_back)$adj.r.squared
+R2adj
+
+summary(ord_pmea_back)
+```
+**DHW is a more consistent driver of p. mea which does have a lower thermal tolerance and likely makes sense 
+
+
+##8.2 Ordistep and dbRDA models
+```{r}
+ord_pmea_full <- rda(gen ~ SCV_me_002 + Kd_490 + DHW_me_002 + SST_me_002 + Condition(MEM1 + MEM3), data = meta)
+
+
+ordi_pmea <- ordistep(ord_pmea_full, direction = "backward", permutations = 999)
+anova(ordi_pmea, by = 'margin')
+
+R2adj <- RsquareAdj(ordi_pmea)$adj.r.squared
+R2adj
+
+summary(ordi_pmea)
+   #                      Df    AIC      F Pr(>F)   
+#- Kd_490                  1 694.18 0.8366  0.900   
+#- SST_me_002              1 694.28 0.9264  0.615   
+#- SCV_me_002              1 694.68 1.3075  0.053 . 
+#- DHW_me_002              1 695.03 1.6364  0.007 **
+#- Condition(MEM1 + MEM3)  2 693.52     
+```
+
+##7.2b With Admixture coefficients 
+```{r}
+ord_pmea_full_admix <- rda(gen ~ SCV_me_002 + Kd_490 + DHW_me_002 + SST_me_002 + Condition(MEM1 + MEM3 + Admix), data = meta)
+
+ordi_pmea_admix <- ordistep(ord_pmea_full_admix, direction = "backward", permutations = 999)
+anova(ordi_pmea_admix, by = 'margin')
+
+R2adj <- RsquareAdj(ordi_pmea_admix)$adj.r.squared
+R2adj
+
+summary(ordi_pmea_admix)
+```
+
+
+
+## 7.3 Variance explained 
+```{r}
+# Extract eigenvalues
+eigenvalues <- ord_pmea_full$CCA$eig
+
+# Calculate proportion of variance explained
+explained_variance <- eigenvalues / sum(eigenvalues)
+
+# Create a bar plot to visualize explained variance
+barplot(explained_variance, 
+        main = "Explained Variance per Axis",
+        xlab = "Axis",
+        ylab = "Proportion Explained",
+        names.arg = seq_along(explained_variance))
+
+
+# Custom x and y labels
+xlab = paste("Axis 1 (4.2%)")
+ylab = paste("Axis 2 (1.0%)")
+```
+
+##7.4 Extract vectors/scores
+```{r}
+
+#extract scores (values assigned to Ind) from dbRDA and left-join metadata 
+pmea_scores <- as.data.frame(scores(ordi_pmea, display = "sites")) %>%
+  tibble::rownames_to_column(var = "Ind") %>%
+  left_join(., meta)
+
+#extract vectors from dbRDA 
+pmea_vectors <- as.data.frame(ordi_pmea$CCA$biplot) %>%
+  tibble::rownames_to_column(var = "factors")
+
+pmea_scores <- pmea_scores %>% 
+  mutate(sector = factor(sector, levels = c("CapeGrenville", "PCB", "Cairns", "Townsville", "Swains", "CapBunker", "CS1", "CS2", "CS3", "CS4", "CS5", "CS6"))) 
+
+```
+
+##7.5 Define sector colours 
+```{r}
+reef_names <- c("CapeGrenville", "PCB", "Cairns", "Townsville", "Swains", "CapBunker", "CS1", "CS2", "CS3", "CS4", "CS5", "CS6")
+
+reef_pal2 <- c("#aa3653", "#d34467", "#dc6986", "#a15284", "#c867a5", "#d386b7",
+               "#3f5d82", "#4f73a1", "#729fb4", "#1c7873", "#27958f", "#4eaaa6")
+
+names(reef_pal2) <- reef_names
+```
+
+
+##4.4 Theme for PCA
+```{r}
+theme_PCA <-theme(aspect.ratio = 3/5) +
+  theme(axis.line = element_blank()) +
+  theme(plot.background = element_blank(),
+    panel.background = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank()) +
+ theme(panel.border = element_rect(colour = "black", fill=NA, size=1))
+```
+
+##7.6 dbRDA by sector
+```{r}
+library(ggrepel)
+#produce dbRDA plot 
+rda_sector <- pmea_scores %>%
+    ggplot(aes(x = RDA1, y = RDA2)) +
+      geom_segment(data = pmea_vectors, aes(x = 0, xend = RDA1, y = 0, yend = RDA2), 
+      size = 0.5, arrow = arrow(length = unit(0.5, "cm")), colour = "black") +
+   geom_point(aes(fill = factor(sector)), size = 3, shape = 21) +
+      geom_label_repel(data = pmea_vectors, aes(x = RDA1, y = RDA2, label = factors), box.padding = 0.5, size = 4, segment.colour = NA) +
+        scale_fill_manual(values = reef_pal2) +
+    labs(x = xlab, y = ylab) +
+     theme(legend.position = "none") +
+    theme(aspect.ratio = 1, text = element_text(size = 12)) +
+  theme(plot.background = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank()) +
+  theme_PCA 
+
+rda_sector
+
+#saved as 4 x 5 inches as PDF 
+```
+
+```{r}
+symbiont <- read.csv("SymbiontMetadata.csv") %>% 
+dplyr::select(c("Vial", "Depth")) %>% 
+  rename(Ind = Vial)
+
+pmea.depth <- pmea.meta %>% left_join(symbiont) %>% 
+    na.omit()
+
+summary_stats <- pmea.depth %>%
+  summarise(
+    average_depth = mean(Depth, na.rm = TRUE),
+    standard_error = sd(Depth, na.rm = TRUE) / sqrt(n())
+  )
+
+```
+

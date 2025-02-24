@@ -1,0 +1,171 @@
+---
+title: "PV08_PieChart"
+output: html_document
+date: "2024-04-24"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+#reading in files with population level 
+```{r}
+gl.pop <- gl.read.dart(filename = "Data/Report_DPoc22-7156_SNP_mapping_2.csv", covfilename = "Data/Pverrucosa_DartLIMS_pop.csv")
+
+gl.pop <- gl.drop.pop(gl.pop, 
+                  pop.list =c("Chinaman"))
+
+
+#removign falsely ID P. verrucosa
+gl.pop <- gl.drop.ind(gl.pop, 
+       ind.list =c('P ver 282', 'P ver 285', 'P ver 130', 'P ver 149', 'P ver 126'))
+popNames(gl.pop)
+
+m <- as.matrix(gl.pop)
+gl.pop <- gl.filter.secondaries(gl.pop)
+gl.pop <- gl.filter.reproducibility(gl.pop, threshold = 0.98)
+gl2.pop <- gl.filter.callrate(gl.pop, method = "loc", threshold = 0.80)
+gl2.pop <- gl.filter.rdepth(gl2.pop, lower = 5, upper = 200, verbose = 3)
+gl3.pop <- gl.filter.maf(gl2.pop, threshold = 0.95) 
+
+gl3.pop <- gl.impute(
+  gl3.pop,
+  method = "neighbour",
+  fill.residual = TRUE,
+  parallel = FALSE,
+  verbose = NULL
+)
+
+```
+
+
+```{r}
+#converting a genlight object (we have) to a genind object so we can look at genetic data at an individual data using adegenet package. 
+pver_gen.pop <- gl2gi(gl3.pop, probar = FALSE, verbose = NULL)
+pver_gen.pop
+
+is.genind(pver_gen.pop)
+```
+
+##2.3 Check monomorphic loci 
+```{r}
+#check that loci are still polymorphic after filtering. Retaining monomorphic loci unnecessarily increases the size of the dataset and will affect some calculations.
+
+isPoly(pver_gen.pop) %>% summary
+
+#remove loci that are not polymorphic 
+
+poly_loci = names(which(isPoly(pver_gen.pop) == TRUE))
+pver_gen.pop = pver_gen.pop[loc = poly_loci]
+isPoly(pver_gen.pop) %>% summary
+```
+
+
+
+##ADMIXTURE AT POPULATION LEVEL 
+#6. Admixture analysis 
+```{r}
+library(LEA)
+## Here we are moving on to the LEA package in order to estimate K clusters and create admixture plots 
+```
+
+##6.1 Convert to geno format
+```{r}
+gl2geno(gl3.pop, outfile = "gl_geno", outpath = getwd(), verbose = NULL)
+```
+
+
+##6.2 Plot variance 
+```{r, include = FALSE}
+pc = pca("gl_geno.lfmm", scale = TRUE)
+tw = tracy.widom(pc)
+
+#Plots the percentage of variance explained by eah component. You can look at the 'elbow' to inform the number of genetic clusers. It looks like ours is between 3-5.
+plot(tw$percentage, pch = 19, col = "darkblue", cex = .8)
+```
+
+
+##6.3 SNMF algorithm
+```{r, include = FALSE}
+snmf1 = snmf("gl_geno.geno",
+        K = 1:10,    #number of K ancestral populations to run
+        entropy = TRUE,     #calculate cross-entropy
+        repetitions = 10,    #10 repetitions for each K
+        project = "new")
+
+plot(snmf1, col = "blue", cex = 1.5, pch = 19)
+```
+
+
+##6.4 Extract cross-entropy
+```{r}
+# Extract the cross-entropy of all runs where K = 2
+ce = cross.entropy(snmf1, K = 2)
+ce
+#choose lowest of the 10 runs for k =2
+lowest.ce = which.min(ce)
+lowest.ce
+```
+
+
+##6.5 Create qmatrix 
+```{r}
+#select k with lowest cross entropy and extract admixture results 
+qmatrix = as.data.frame(Q(snmf1, K = 2, run = lowest.ce))
+head(qmatrix)
+
+# Label column names of qmatrix
+ncol(qmatrix)
+cluster_names = c()
+for (i in 1:ncol(qmatrix)){
+  cluster_names[i] = paste("Cluster", i)
+}
+cluster_names
+colnames(qmatrix) = cluster_names
+head(qmatrix)
+
+# Add individual IDs
+qmatrix$Ind = indNames(pver_gen.pop)
+
+#Add site IDs
+qmatrix$Site = pver_gen.pop$pop
+
+#Convert dataframe to long format
+qlong = melt(qmatrix, id.vars=c("Ind","Site"))
+```
+
+
+
+##Pie chart map building
+
+```{r}
+clust_pal <- c("#E3856B", "#EEC95C")
+clust_names <- c("Cluster 1", "Cluster 2")
+names(clust_pal) <- clust_names
+
+pver.pie <- qlong %>% 
+  group_by(Site, variable) %>% 
+  dplyr::summarise(mean = mean(value))
+
+pver.pie %>% arrange(variable)
+
+
+ggplot(pver.pie, aes(x = "", y = mean, fill = factor(variable))) +
+  geom_bar(position="fill", stat="identity") + coord_polar("y")+
+  facet_wrap( ~ Site) +
+  scale_fill_manual(values = clust_pal) +
+  theme_classic()+
+  theme(legend.position = c(1.1, 0.85), 
+        axis.title=element_blank(), 
+        axis.line=element_blank(),
+        axis.ticks=element_blank(), 
+        axis.text=element_blank(),
+        plot.background = element_blank(), 
+        plot.title=element_text(color="black",size=10,face="plain",hjust=0.5),
+        strip.background = element_blank())
+
+save(pver.pie, file = "pver.pie.RData")
+
+```

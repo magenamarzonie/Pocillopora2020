@@ -1,0 +1,283 @@
+---
+title: "PV07_RDA"
+output: html_document
+date: "2024-04-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(adegenet)
+library(usedist)
+library(vegan)
+library(tidyverse)
+
+load("Data/all.env.RData")
+
+pver.meta <- read.csv("Data/pver.meta2.csv") %>% 
+  rename(Reef = pop) %>% 
+  mutate(Reef = as.factor(Reef)) %>% 
+  dplyr::select(Ind, Reef, MMM, sector)
+
+pver.meta <- pver.meta %>% left_join(admix_clust) %>% 
+  na.omit()
+
+pver.meta2 <- pver.meta %>% left_join(all.env) %>% na.omit() %>% dplyr::select(-SPM_me_002) %>% 
+  mutate(Ind = as.factor(Ind))
+
+row.names(pver.meta2) <- pver.meta2$Ind
+
+```
+
+
+
+##8.1 PCoA
+```{r}
+#join all environmental data together
+library(tidyverse)
+
+load("Data/gl3.RData")
+#calculate distance matrix 
+dist_pver <- gl.dist.ind(gl3, method = "euclidean", scale = TRUE)
+
+pcoa.pver <- cmdscale(dist_pver, eig = TRUE) #classic PCoA 
+
+pcoa.pverXY <- data.frame(pcoa.pver$points) %>% 
+    rownames_to_column(var = "Ind") %>% 
+  left_join(., pver.meta2) %>% 
+  mutate(Ind = as.factor(Ind)) 
+
+pcoa_plot <-pcoa.pverXY %>%
+  ggplot(aes(X1, X2, fill = Reef)) + 
+  geom_point(alpha = 1, shape = 21, size = 3) +
+  theme(legend.position = "right", aspect.ratio = 1, text = element_text(size = 10))
+
+pcoa_plot
+
+pcoa_result <- pcoa.pverXY[, c("X1", "X2")]
+```
+
+
+Genetic data
+##1.1 Calculate individual genetic distance
+```{r}
+#genind format genetic matrix 
+load("Data/pver_gen.RData")
+
+gen <- pver_gen %>% as.matrix
+
+dim(gen)
+#  180 ind and 7150 loci
+sum(is.na(gen))
+#0 because we already imputed missing data. 
+
+```
+
+
+```{r}
+#making a common dataframe with the 247 individuals that match. 
+common_row_names <- intersect(rownames(gen), rownames(pver.meta2))
+
+#make subset dataframe so that we can run the RDA code below. 
+meta <- pver.meta2[common_row_names, ]
+gen <- gen[common_row_names, ]
+```
+
+
+
+```{r}
+library(vegan)
+library(corrplot)
+
+#trying admix as a predictor 
+ord_pver <- rda(gen ~ SCV_me_002 + Kd_490 + DHW_me_002 + SST_me_002 + Admix + Condition(MEM1 + MEM3), data = meta)
+
+sort(vif.cca(ord_pver)) 
+
+ord_pver_forward <- ordistep(ord_pver, direction = "forward", permutations = 999)
+anova(ord_pver_forward, by = 'margin')
+
+R2adj <- RsquareAdj(ord_pver_forward)$adj.r.squared
+R2adj
+
+ord_pver_back <- ordistep(ord_pver, direction = "backward", permutations = 999)
+anova(ord_pver_back, by = 'margin')
+
+R2adj <- RsquareAdj(ord_pver_back)$adj.r.squared
+R2adj
+```
+
+```{r}
+library(vegan)
+library(corrplot)
+
+#admixture as a constrained variable. 
+ord_pver <- rda(gen ~ SCV_me_002 + Kd_490 + DHW_me_002 + SST_me_002 + Condition(Admix + MEM1 + MEM3), data = meta)
+
+sort(vif.cca(ord_pver)) 
+
+ord_pver_forward <- ordistep(ord_pver, direction = "forward", permutations = 999)
+anova(ord_pver_forward, by = 'margin')
+
+R2adj <- RsquareAdj(ord_pver_forward)$adj.r.squared
+R2adj
+
+ord_pver_back <- ordistep(ord_pver, direction = "backward", permutations = 999)
+anova(ord_pver_back, by = 'margin')
+
+R2adj <- RsquareAdj(ord_pver_back)$adj.r.squared
+R2adj
+```
+
+##8.2 Ordistep and dbRDA models
+```{r}
+ord_pver_full <- rda(gen ~ SCV_me_002 + Kd_490 + DHW_me_002 + SST_me_002 + Condition(MEM1 + MEM3), data = meta)
+
+
+ordi_pver <- ordistep(ord_pver_full, direction = "backward", permutations = 999)
+anova(ordi_pver, by = 'margin')
+
+#Model: rda(formula = gen ~ DHW_me_002 + SST_me_002 + Condition(MEM1 + MEM3), data = meta)
+ #           Df Variance      F Pr(>F)    
+#DHW_me_002   1     7.96 1.1463  0.001 ***
+#SST_me_002   1    11.86 1.7088  0.001 ***
+#Residual   175  1214.50        
+
+R2adj <- RsquareAdj(ordi_pver)$adj.r.squared
+R2adj
+
+summary(ordi_pver)
+```
+
+##7.2b With Admixture coefficients 
+```{r}
+ord_pver_full <- rda(gen ~ SCV_me_002 + Kd_490 + DHW_me_002 + SST_me_002 + Condition(MEM1 + MEM3 + Admix), data = meta)
+
+
+ordi_pver <- ordistep(ord_pver_full, direction = "backward", permutations = 999)
+anova(ordi_pver, by = 'margin')
+
+    
+
+R2adj <- RsquareAdj(ordi_pver)$adj.r.squared
+R2adj
+
+summary(ordi_pver)
+```
+
+
+## 7.3 Variance explained 
+```{r}
+# Extract eigenvalues
+eigenvalues <- ord_pver_full$CCA$eig
+
+# Calculate proportion of variance explained
+explained_variance <- eigenvalues / sum(eigenvalues)
+
+# Create a bar plot to visualize explained variance
+barplot(explained_variance, 
+        main = "Explained Variance per Axis",
+        xlab = "Axis",
+        ylab = "Proportion Explained",
+        names.arg = seq_along(explained_variance))
+
+
+# Custom x and y labels
+xlab = paste("Axis 1 (0.1%)")
+ylab = paste("Axis 2 (0.1%)")
+```
+
+##7.4 Extract vectors/scores
+```{r}
+
+#extract scores (values assigned to Ind) from dbRDA and left-join metadata 
+pver_scores <- as.data.frame(scores(ordi_pver, display = "sites")) %>%
+  tibble::rownames_to_column(var = "Ind") %>%
+  left_join(., meta)
+
+#extract vectors from dbRDA 
+pver_vectors <- as.data.frame(ordi_pver$CCA$biplot) %>%
+  tibble::rownames_to_column(var = "factors")
+
+pver_scores <- pver_scores %>% 
+  mutate(sector = factor(sector, levels = c("CapeGrenville", "PCB", "Cairns", "Townsville", "CS1", "CS2", "CS3", "CS4", "CS5", "CS6"))) 
+
+```
+
+##7.5 Define sector colours 
+```{r}
+reef_names <- c("CapeGrenville", "PCB", "Cairns", "Townsville", "Swains", "CapBunker", "CS1", "CS2", "CS3", "CS4", "CS5", "CS6")
+
+reef_pal2 <- c("#aa3653", "#d34467", "#dc6986", "#a15284", "#c867a5", "#d386b7",
+               "#3f5d82", "#4f73a1", "#729fb4", "#1c7873", "#27958f", "#4eaaa6")
+
+names(reef_pal2) <- reef_names
+```
+
+
+##4.4 Theme for PCA
+```{r}
+theme_PCA <-theme(aspect.ratio = 3/5) +
+  theme(axis.line = element_blank()) +
+  theme(plot.background = element_blank(),
+    panel.background = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank()) +
+ theme(panel.border = element_rect(colour = "black", fill=NA, size=1))
+```
+
+##7.6 dbRDA by sector
+```{r}
+library(ggrepel)
+#produce dbRDA plot 
+rda_sector <- pver_scores %>%
+    ggplot(aes(x = RDA1, y = RDA2)) +
+      geom_segment(data = pver_vectors, aes(x = 0, xend = RDA1, y = 0, yend = RDA2), 
+      size = 0.5, arrow = arrow(length = unit(0.5, "cm")), colour = "black") +
+   geom_point(aes(fill = factor(sector)), size = 3, shape = 21) +
+      geom_label_repel(data = pver_vectors, aes(x = RDA1, y = RDA2, label = factors), box.padding = 0.5, size = 4, segment.colour = NA) +
+        scale_fill_manual(values = reef_pal2) +
+    labs(x = xlab, y = ylab) +
+     theme(legend.position = "none") +
+    theme(aspect.ratio = 1, text = element_text(size = 12)) +
+  theme(plot.background = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank()) +
+  theme_PCA 
+
+rda_sector
+
+#saved as 4x5 inch pdf 
+```
+
+
+##here is the code i had to use in the PCA to get the % variance explained by axes
+##3.1 PCA model 
+```{r}
+# Extract eigenvalues
+eigenvalues <- ord_pver_full$CCA$eig
+
+# Calculate proportion of variance explained
+explained_variance <- eigenvalues / sum(eigenvalues)
+
+# Create a bar plot to visualize explained variance
+barplot(explained_variance, 
+        main = "Explained Variance per Axis",
+        xlab = "Axis",
+        ylab = "Proportion Explained",
+        names.arg = seq_along(explained_variance))
+
+
+# Custom x and y labels
+xlab = paste("Axis 1 (33.6%)")
+ylab = paste("Axis 2 (23.7%)")
+```
+
+
+```{r}
+left_join(pver.meta) %>% 
+```
+

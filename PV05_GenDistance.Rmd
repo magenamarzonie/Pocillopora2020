@@ -1,0 +1,49 @@
+---
+title: "05_GenDistance"
+output: html_document
+date: "2024-04-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+#Load libraries 
+```{r}
+library(dartR)
+library(adegenet)
+library(poppr)
+library(hierfstat)
+library(reshape2)
+library(ggplot2)
+library(RColorBrewer)
+library(scales)
+library(dplyr)
+library(adegenet)
+library(tidyverse)
+```
+
+#1. Genetic data
+##1.1 Calculate individual genetic distance
+```{r}
+#genind format genetic matrix 
+load("Data/pver_gen.RData")
+pver.gen <- pver_gen %>% as.matrix
+
+dim(pver.gen)
+#256 individuals and 8088 loci
+
+sum(is.na(pver.gen))
+#0 because we already imputed missing data. 
+
+save(pver.gen, file = "Data/gen.RData")
+#save(gl3, file = "gl3.RData")
+
+```
+
+```{r}
+gen.imp <- apply(pver.gen, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x))))))
+sum(is.na(gen.imp)) # No NAs
+```
+

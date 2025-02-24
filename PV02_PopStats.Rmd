@@ -1,0 +1,239 @@
+---
+title: "PM02_PopStats"
+output: html_document
+date: "2024-04-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+#Load libraries
+```{r}
+#load libraries 
+library(dartR)
+library(adegenet)
+library(poppr)
+library(hierfstat)
+library(reshape2)
+library(ggplot2)
+library(RColorBrewer)
+library(scales)
+library(dplyr)
+```
+
+
+#Load data from 01_QCFilter.Rmd
+```{r}
+#this data is compatible with adegenet and LEA packages for population statistics
+load("Data/pver_gen.RData")
+```
+
+#2. Genetic diversity statistics
+
+## 2.1 Heterozygosity (Ho)
+```{r}
+#Here we are calculating basic stats using hierfstat
+basic_pver = basic.stats(pver_gen, diploid = TRUE)
+
+# Mean observed heterozygosity per site
+Ho_pver = apply(basic_pver$Ho, MARGIN = 2, FUN = mean, na.rm = TRUE) %>%
+  round(digits = 3)
+Ho_pver
+
+   # Cairns CapeGrenville           CS1           CS2           CS3           CS4           CS5           CS6 
+      #  0.094         0.099         0.099         0.100         0.099         0.133         0.102         0.099 
+       #   PCB    Townsville 
+  #      0.099         0.093 
+```
+
+## 2.2 Heterozygosity (He)
+```{r}
+# Mean expected heterozygosity per site
+He_pver = apply(basic_pver$Hs, MARGIN = 2, FUN = mean, na.rm = TRUE) %>%
+  round(digits = 3)
+He_pver
+
+  #Cairns CapeGrenville           CS1           CS2           CS3           CS4           CS5           CS6 
+     #   0.135         0.137         0.136         0.136         0.136         0.149         0.141         0.137 
+     #     PCB    Townsville 
+   #     0.137         0.136 
+
+```
+
+## 2.3 Plot He/Ho
+```{r}
+# Create a data.frame of site names, Ho and He and then convert to long format
+Het_pver_df = data.frame(Site = names(Ho_pver), Ho = Ho_pver, He = He_pver) %>%
+  melt(id.vars = "Site")
+
+# Custom theme for ggplot2
+custom_theme = theme(
+  axis.text.x = element_text(size = 10, angle = 90, vjust = 0.5, face = "bold"),
+  axis.text.y = element_text(size = 10),
+  axis.title.y = element_text(size = 12),
+  axis.title.x = element_blank(),
+  axis.line.y = element_line(size = 0.5),
+  legend.title = element_blank(),
+  legend.text = element_text(size = 12),
+  panel.grid = element_blank(),
+  panel.background = element_blank(),
+  plot.title = element_text(hjust = 0.5, size = 15, face="bold")
+  )
+
+# Italic label
+hetlab.o = expression(italic("H")[o])
+hetlab.e = expression(italic("H")[e])
+
+# Acropora heterozygosity barplot
+ggplot(data = Het_pver_df, aes(x = Site, y = value, fill = variable))+
+  geom_bar(stat = "identity", position = position_dodge(width = 0.6), colour = "black")+
+  scale_y_continuous(expand = c(0,0), limits = c(0,0.2), breaks = c(0, 0.05, 0.10, 0.15, 0.20))+
+  scale_fill_manual(values = c("pink", "#bdbdbd"), labels = c(hetlab.o, hetlab.e))+
+  ylab("Heterozygosity")+
+  ggtitle("P. verrucosa")+
+  custom_theme
+```
+
+##2.4 Inbreeding (Fis)
+```{r}
+#Looking at Fis values. This is an inbreeding coefficient. Ranges from 0-1. A high FIS implies a lot of inbreeding in a population. 
+#(e.g. Bougainville, Frederick, Wreck)
+
+apply(basic_pver$Fis, MARGIN = 2, FUN = mean, na.rm = TRUE) %>%
+  round(digits = 3)
+
+     #  Cairns CapeGrenville           CS1           CS2           CS3           CS4           CS5           CS6 
+     #   0.217         0.219         0.229         0.235         0.220         0.094         0.236         0.192 
+     #     PCB    Townsville 
+     #   0.229         0.237 
+
+```
+
+
+
+##2.5 Isolation by distance models
+```{r}
+ibd <- gl.ibd(gl3, Dgeo_trans='log(Dgeo)' ,Dgen_trans='Dgen/(1-Dgen)')
+```
+
+
+##2.6 Calculate Fst
+```{r}
+#using hierfstat package here. 
+#compute pairwise Fst values. Returns pairwise distances folloiwng Weir & Cockerham 1984 
+pver_fst = genet.dist(pver_gen, method = "WC84") %>% round(digits = 3)
+pver_fst
+```
+
+##2.7 Visualise Fst
+```{r}
+
+#Visualise pairwise Fst for reefs 
+# Desired order of labels
+
+lab_order = c("CapeGrenville", "PCB", "Cairns", "Townsville", "CS1","CS2", "CS3", "CS4","CS5", "CS6")
+
+# Change order of rows and cols
+fst.mat = as.matrix(pver_fst)
+fst.mat1 = fst.mat[lab_order, ]
+fst.mat2 = fst.mat1[, lab_order]
+
+# Create a data.frame
+ind = which(upper.tri(fst.mat2), arr.ind = TRUE)
+fst.df = data.frame(Site1 = dimnames(fst.mat2)[[2]][ind[,2]],
+                    Site2 = dimnames(fst.mat2)[[1]][ind[,1]],
+                    Fst = fst.mat2[ ind ])
+
+# Keep the order of the levels in the data.frame for plotting 
+fst.df$Site1 = factor(fst.df$Site1, levels = unique(fst.df$Site1))
+fst.df$Site2 = factor(fst.df$Site2, levels = unique(fst.df$Site2))
+fst.df$Fst[fst.df$Fst < 0] = 0
+fst.df %>% str
+fst.label = expression(italic("F")[ST])
+mid = max(fst.df$Fst) / 2
+
+# Plot heatmap
+ggplot(data = fst.df, aes(x = Site1, y = Site2, fill = Fst)) +
+  geom_tile(colour = "black") +
+   geom_text(aes(label = Fst), color="black", size = 3)+
+  scale_fill_gradientn(
+    colours = c("#66BD63", "#FFFFBF", "#D73027"),
+    limits = c(0, .18),
+    breaks = c(0, 0.09, 0.18),
+    guide = "colorbar"
+  ) +
+  scale_x_discrete(expand = c(0, 0)) +
+  scale_y_discrete(expand = c(0, 0), position = "right") +
+  theme(
+    axis.text = element_text(colour = "black", size = 10, face = "bold"),
+    axis.title = element_blank(),
+    axis.text.x = element_text(angle = 45, vjust = 0.5),
+    panel.grid = element_blank(),
+    panel.background = element_blank(),
+         legend.position = c(0.15, 0.7),  # Adjust the coordinates (x, y) here
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.direction = "horizontal"
+  ) +
+  coord_fixed(ratio = 0.9)
+```
+
+
+##2.8 Allelic richness
+```{r}
+allelic.richness(genind2hierfstat(pver_gen))$Ar %>%
+  apply(MARGIN = 2, FUN = mean) %>% 
+  round(digits = 3)
+
+#Cairns CapeGrenville           CS1           CS2           CS3           CS4           CS5           CS6 
+    #    1.366         1.394         1.392         1.394         1.394         1.425         1.404         1.358 
+  #        PCB    Townsville 
+   #     1.395         1.388 
+```
+
+
+
+```{r}
+#this code is to make a list of each of the two genlights and then find the inds that have been filtered. 
+indnames.gl <- indNames(gl)
+indnames.gl3 <- indNames(gl3)
+
+diff_indnames <- setdiff(indnames.gl, indnames.gl3)
+print(diff_indnames)
+```
+
+
+##2.9 AMOVA
+```{r}
+#running Analysis of Molecular Variance
+library("adegenet")
+library("pegas")
+library("mmod")
+library("poppr")
+
+# Import strata
+my_strata <- read.csv("Data/pver_strata.csv") %>% 
+  dplyr::select(Ind, Pop) 
+
+#define strata file in genind
+strata(pver_gen) <- my_strata
+setPop(pver_gen) <-~Pop
+
+
+# AMOVA
+amova.sector <- poppr.amova(pver_gen , ~Pop,  within = F) 
+amova.sector
+# this is to use populations as lowest level
+
+amova.sector_sig <- randtest(amova.sector, nrepet = 999)
+
+# This was done with no correction method though!
+
+amova.sector_sig
+plot(amova.sector_sig)
+
+#most of the variation occurs within samples, but we also have a lot of variation between samples. 
+#while there is variation between sectors, there is not a lot, and suggests relatively panmictic populations. 
+```

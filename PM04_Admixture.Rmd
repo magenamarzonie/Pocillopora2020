@@ -1,0 +1,307 @@
+---
+title: "PM04_Admixture"
+output: html_document
+date: "2024-04-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+**This code follows from 03_PCA.Rmd to assess admixture co-efficients**
+
+#6. Admixture analysis
+```{r}
+library(dartR)
+library(adegenet)
+library(poppr)
+library(hierfstat)
+library(reshape2)
+library(ggplot2)
+library(RColorBrewer)
+library(scales)
+library(dplyr)
+library(LEA)
+## Here we are moving on to the LEA package in order to estimate K clusters and create admixture plots 
+```
+
+
+
+##6.1 Convert to geno format
+```{r}
+load("Data/gl3.RData")
+load("Data/pmea_gen.RData")
+
+gl2geno(gl3, outfile = "Outputs/gl_geno", outpath = getwd(), verbose = NULL)
+```
+
+
+##6.2 Plot variance
+```{r, include = FALSE}
+pc = pca("Outputs/gl_geno.lfmm", scale = TRUE)
+tw = tracy.widom(pc)
+
+#Plots the percentage of variance explained by eah component. You can look at the 'elbow' to inform the number of genetic clusers. It looks like ours is between 3-5.
+plot(tw$percentage, pch = 19, col = "darkblue", cex = .8)
+```
+
+## 6.3 SNMF algorithm
+```{r, include = FALSE}
+snmf1 = snmf("Outputs/gl_geno.geno",
+        K = 1:10,    #number of K ancestral populations to run
+        entropy = TRUE,     #calculate cross-entropy
+        repetitions = 10,    #10 repetitions for each K
+        project = "new")
+
+save(snmf1, file = "Outputs/snmf1.RData")
+
+#load("Outputs/snmf1.RData")
+
+plot(snmf1, col = "blue", cex = 1.5, pch = 19)
+```
+
+
+##6.4 Extract cross-entropy
+```{r}
+# Extract the cross-entropy of all runs where K = 2
+ce = cross.entropy(snmf1, K = 2)
+ce
+
+lowest.ce = which.min(ce)
+lowest.ce
+```
+
+##6.5 Create qmatrix 
+```{r}
+qmatrix = as.data.frame(Q(snmf1, K = 2, run = lowest.ce))
+head(qmatrix)
+
+# Label column names of qmatrix
+ncol(qmatrix)
+cluster_names = c()
+for (i in 1:ncol(qmatrix)){
+  cluster_names[i] = paste("Cluster", i)
+}
+cluster_names
+colnames(qmatrix) = cluster_names
+head(qmatrix)
+
+
+# Add individual IDs
+qmatrix$Ind = indNames(pmea_gen)
+
+#Add site IDs
+qmatrix$Site = pmea_gen$pop
+head(qmatrix)
+
+#Convert dataframe to long format
+qlong = melt(qmatrix, id.vars=c("Ind","Site"))
+head(qlong)
+```
+
+
+
+## 6.6 Admixture sorted by q-value
+```{r}
+library(ggplot2)
+library(forcats)
+library(ggthemes)
+library(patchwork)
+
+pal = colorRampPalette(c("tomato","lightblue"))
+cols = pal(length(unique(qlong$variable)))
+
+# Reorder factor levels within groups
+qlong <- qlong %>%
+  group_by(variable) %>%
+  mutate(Ind = fct_reorder(Ind, value, .desc = TRUE)) %>%
+  arrange(variable, Ind)
+
+qlong <- qlong %>% mutate(variable = factor(variable, levels = c("Cluster 1", "Cluster 2"))) %>% 
+ mutate(variable = dplyr::recode(variable, "Cluster 1" = "PMCL1", "Cluster 2" = "PMCL2"))
+
+
+# Plot with reordered bars
+admix.fig <- ggplot(qlong, aes(factor(Ind), value, fill = factor(variable))) +
+  geom_col(color = "gray", linewidth = 0.1, width=1) +
+  theme_minimal() +
+    scale_fill_manual(values = cols)+
+  labs(x = "Individual", y = "Admixture Proportion") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_x_discrete(expand = expansion(add = 1)) +
+  theme(
+    panel.spacing.x = unit(0.1, "lines"),
+    axis.text.x = element_blank(),
+    panel.grid = element_blank())+
+    theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.x=element_blank(),
+        strip.text=element_text(colour="black", size=12),
+        panel.grid=element_blank(),
+        panel.background=element_blank(),
+        legend.position="bottom",
+        legend.title=element_blank(),
+        legend.text=element_text(size=12)) +
+    theme(plot.margin = margin(t = 30, r = 10, b = 30, l = 10, unit = "mm"))
+
+  
+admix.fig
+```
+
+##6.7 Admixture faceted by sector
+```{r}
+library(forcats)
+
+# Relevel the "Site" variable
+qlong$Site <- forcats::fct_relevel(qlong$Site, "CapeGrenville", "PCB", "Cairns", "Townsville","CapBunk", "Swains", "CS1", "CS2", "CS3", "CS4", "CS5", "CS6")
+
+# Relevel the "Ind" variable by the "Site" variable in the data frame
+qlong$Ind <- factor(qlong$Ind, levels = unique(qlong$Ind[order(qlong$Site)]))
+
+#
+admix.fig <- ggplot(qlong, aes(x = Ind, y = value, fill = variable)) +
+  geom_col(color = "gray", linewidth = 0.1, width = 1) +
+  facet_grid(~ Site, scales = "free_x", space = "free_x", switch = "x") +
+  theme_minimal() +
+  scale_fill_manual(values = cols) +
+  labs(x = "Individual", y = "Admixture Proportion") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_x_discrete(expand = expansion(add = 1)) +
+  theme(
+    panel.spacing.x = unit(0.1, "lines"),
+    panel.grid = element_blank(),
+    axis.text.x = element_blank(),
+    strip.text = element_text(colour = "black", size = 6),
+    panel.background = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 8),
+    plot.margin = margin(t = 30, r = 10, b = 30, l = 10, unit = "mm"),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.5)
+  )
+
+admix.fig
+```
+
+
+
+##6.8 Admixture summary statistics
+```{r}
+qlong %>% group_by(variable) %>% 
+  summarise(mean = mean(value))
+```
+
+```{r}
+qlong
+majority_cluster <- qlong %>%
+  group_by(Ind) %>%
+  filter(value == max(value)) %>%
+  slice(1) %>%  # Ensure only one row in case of ties
+  ungroup()
+
+admix_clust <- majority_cluster %>% 
+  rename(Admix = variable) %>% 
+  dplyr::select(c(Ind, Admix))
+```
+
+
+```{r}
+#What is the proportion of PMCL1 in GBR vs. Coral Sea? 
+qlong %>% group_by(variable) %>% 
+  filter(variable == "PMCL1") %>% 
+  filter(Site %in% c("PCB", "Townsville", "CapBunk", "Swains")) %>% 
+  summarise(mean = mean(value))
+
+qlong %>% group_by(variable) %>% 
+  filter(variable == "PMCL1") %>% 
+  filter(Site %in% c("CS1", "CS2", "CS3", "CS4", "CS5", "CS6")) %>% 
+  summarise(mean = mean(value))
+
+
+#what is the proportion of PMCL2 found in GBR vs Coral Sea? 
+qlong %>% group_by(variable) %>% 
+  filter(variable == "PMCL2") %>% 
+  filter(Site %in% c("PCB", "Townsville", "CapBunk", "Swains")) %>% 
+  summarise(mean = mean(value))
+
+qlong %>% group_by(variable) %>% 
+  filter(variable == "PMCL2") %>% 
+  filter(Site %in% c("CS1", "CS2", "CS3", "CS4", "CS5", "CS6")) %>% 
+  summarise(mean = mean(value))
+
+```
+
+
+```{r}
+#what is the proportion of PMCL1 in the northern GBR reefs? 
+qlong %>% group_by(variable) %>% 
+  filter(variable == "PMCL1") %>% 
+  filter(Site %in% c("PCB", "Townsville")) %>% 
+  summarise(mean = mean(value))
+
+qlong %>% group_by(variable) %>% 
+  filter(variable == "PMCL1") %>% 
+ filter(Site %in% c("CS1", "CS2")) %>% 
+  summarise(mean = mean(value))
+
+qlong %>% group_by(variable) %>% 
+  filter(variable == "PMCL1") %>% 
+ filter(Site %in% c("Swains")) %>% 
+  summarise(mean = mean(value))
+
+qlong %>% group_by(variable) %>% 
+  filter(variable == "PMCL2") %>% 
+ filter(Site %in% c("CapBunk")) %>% 
+  summarise(mean = mean(value))
+
+qlong %>% group_by(variable) %>% 
+  filter(variable == "PMCL2") %>% 
+ filter(Site %in% c("CS3", "CS4")) %>% 
+  summarise(mean = mean(value))
+
+qlong %>% group_by(variable) %>% 
+  filter(variable == "PMCL2") %>% 
+ filter(Site %in% c("CS5", "CS6")) %>% 
+  summarise(mean = mean(value))
+```
+
+
+#Running statistical tests by site to see if proportion of PMCL1 and 2 vary 
+```{r}
+summary_data <- qlong %>%
+    filter(variable == "PMCL2") %>% 
+  filter(Site == c("CapBunk", "Swains")) %>% 
+  group_by(Site, variable) %>%
+  summarise(mean_value = mean(value, na.rm = TRUE), .groups = "drop")
+
+summary_data2 <- summary_data %>%
+  mutate(
+    Region = case_when(
+      Site %in% c("PCB", "Townsville", "CapBunk", "Swains") ~ "GBR",
+      Site %in% c("CS1", "CS2", "CS3", "CS4", "CS5", "CS6") ~ "CoralSea",
+      TRUE ~ "Unknown" # Catch any unspecified sites
+    )
+  )
+
+summary_data2
+```
+
+```{r}
+qlong.stats <- qlong %>%     
+  filter(variable == "PMCL2") %>% 
+  filter(Site == c("CapBunk", "Swains"))
+```
+
+
+```{r}
+# Perform t-test to compare mean_value across regions
+t_test_result <- t.test(value ~ Site, data = qlong.stats)
+
+# Display the t-test result
+print(t_test_result)
+
+res.aov3 <- aov(value~ Site, data = qlong.stats)
+summary(res.aov3)
+```
+
